@@ -150,8 +150,41 @@ input:focus {
   margin-bottom: 20px;
 }
 
+.reference-grid,
+.diagnostic-grid,
+.quarter-rules,
+.quarter-diagnostics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
 .summary-card {
   padding: 18px;
+}
+
+.reference-card,
+.diagnostic-card,
+.rule-card {
+  background: #f9fbff;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 16px;
+}
+
+.reference-card h3,
+.diagnostic-card h3,
+.rule-card h3 {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+}
+
+.reference-card p,
+.diagnostic-card p,
+.rule-card p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
 }
 
 .summary-card h3,
@@ -198,6 +231,12 @@ input:focus {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.quarter-rules,
+.quarter-ledger,
+.quarter-diagnostics {
+  margin-bottom: 16px;
 }
 
 .badge {
@@ -298,6 +337,16 @@ input:focus {
 .highlight-negative {
   color: var(--danger);
   font-weight: 700;
+}
+
+.bullet-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--muted);
+}
+
+.bullet-list li + li {
+  margin-top: 0.45rem;
 }
 
 .report-actions {

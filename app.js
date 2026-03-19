@@ -54,8 +54,31 @@ const CONSTANTS = {
   cofinsRate: 0.03,
 };
 
+const LEGAL_REFERENCES = [
+  {
+    title: "Q11 - Excedente no lucro presumido",
+    text: "O acréscimo de 10% incide apenas sobre a parcela da receita bruta sujeita à presunção que exceder o limite trimestral/anual.",
+  },
+  {
+    title: "Q11.1 - Receitas financeiras fora do limite",
+    text: "Receitas financeiras entram 100% na base de IRPJ/CSLL, mas não entram no limite de R$ 5.000.000,00 nem no proporcional trimestral.",
+  },
+  {
+    title: "Q12 + Q13 - Início da CSLL em 2026",
+    text: "Para 2026, o acréscimo vale para IRPJ desde o 1º trimestre e para CSLL somente a partir do 2º trimestre, com limite anual de R$ 3.750.000,00.",
+  },
+  {
+    title: "Q15 - IRRF fora da redução",
+    text: "A LC 224/2025 não alcança o IRRF. Neste app, o IRRF mensal é tratado apenas como antecipação/compensação do IRPJ.",
+  },
+];
+
 const storageKey = "planilha-lucro-presumido-2026-comercio";
 let state = loadState();
+const uiState = {
+  activeQuarter: QUARTERS[0].id,
+  activeMonths: Object.fromEntries(QUARTERS.map((quarter) => [quarter.id, `${quarter.id}-m0`])),
+};
 
 function createDefaultState() {
   return {
@@ -133,12 +156,24 @@ function formatPercent(value) {
 }
 
 function renderApp() {
+  renderReferenceGrid();
   renderQuarterStructure();
   const calculation = calculateAll();
   renderAnnualSummary(calculation);
+  renderAnnualDiagnostics(calculation);
   renderQuarterResults(calculation);
   renderRecalcTables(calculation);
   renderDetailedOutput(calculation);
+}
+
+function renderReferenceGrid() {
+  const container = document.getElementById("referenceGrid");
+  container.innerHTML = LEGAL_REFERENCES.map((item) => `
+    <article class="reference-card">
+      <h3>${item.title}</h3>
+      <p>${item.text}</p>
+    </article>
+  `).join("");
 }
 
 function renderQuarterStructure() {
@@ -149,7 +184,7 @@ function renderQuarterStructure() {
 
   QUARTERS.forEach((quarter, qIndex) => {
     const tab = document.createElement("button");
-    tab.className = `quarter-tab ${qIndex === 0 ? "active" : ""}`;
+    tab.className = `quarter-tab ${uiState.activeQuarter === quarter.id ? "active" : ""}`;
     tab.textContent = quarter.label;
     tab.type = "button";
     tab.dataset.target = quarter.id;
@@ -158,7 +193,7 @@ function renderQuarterStructure() {
 
     const panel = document.getElementById("quarterPanelTemplate").content.firstElementChild.cloneNode(true);
     panel.id = quarter.id;
-    if (qIndex === 0) panel.classList.remove("hidden");
+    if (uiState.activeQuarter === quarter.id) panel.classList.remove("hidden");
     panel.querySelector(".quarter-title").textContent = quarter.label;
     panel.querySelector(".quarter-subtitle").textContent = `Meses: ${quarter.months.join(", ")}. Informe receitas, ICMS e IRRF mês a mês.`;
 
@@ -167,16 +202,17 @@ function renderQuarterStructure() {
 
     quarter.months.forEach((monthName, mIndex) => {
       const monthTab = document.createElement("button");
-      monthTab.className = `month-tab ${mIndex === 0 ? "active" : ""}`;
+      const monthId = `${quarter.id}-m${mIndex}`;
+      monthTab.className = `month-tab ${uiState.activeMonths[quarter.id] === monthId ? "active" : ""}`;
       monthTab.type = "button";
       monthTab.textContent = monthName;
-      monthTab.dataset.target = `${quarter.id}-m${mIndex}`;
+      monthTab.dataset.target = monthId;
       monthTab.addEventListener("click", () => activateMonth(panel, monthTab.dataset.target));
       monthTabs.appendChild(monthTab);
 
       const monthPanel = document.getElementById("monthPanelTemplate").content.firstElementChild.cloneNode(true);
-      monthPanel.id = `${quarter.id}-m${mIndex}`;
-      if (mIndex === 0) monthPanel.classList.remove("hidden");
+      monthPanel.id = monthId;
+      if (uiState.activeMonths[quarter.id] === monthId) monthPanel.classList.remove("hidden");
       const monthGrid = monthPanel.querySelector(".month-grid");
       const monthState = state.quarters[qIndex].months[mIndex];
 
@@ -218,6 +254,7 @@ function renderQuarterStructure() {
 }
 
 function activateQuarter(targetId) {
+  uiState.activeQuarter = targetId;
   document.querySelectorAll(".quarter-tab").forEach((button) => {
     button.classList.toggle("active", button.dataset.target === targetId);
   });
@@ -227,6 +264,7 @@ function activateQuarter(targetId) {
 }
 
 function activateMonth(quarterPanel, targetId) {
+  uiState.activeMonths[quarterPanel.id] = targetId;
   quarterPanel.querySelectorAll(".month-tab").forEach((button) => {
     button.classList.toggle("active", button.dataset.target === targetId);
   });
@@ -530,10 +568,59 @@ function renderAnnualSummary(calculation) {
     .join("");
 }
 
+function renderAnnualDiagnostics(calculation) {
+  const annual = calculation.annual;
+  const container = document.getElementById("annualDiagnostics");
+  const irpjAboveLimit = annual.operationalRevenue > CONSTANTS.annualLimitIrpj;
+  const csllEligibleRevenue = calculation.csllOriginal.reduce((total, item) => total + (item.active ? item.operationalRevenue : 0), 0);
+  const csllAboveLimit = csllEligibleRevenue > CONSTANTS.annualLimitCsll2026;
+
+  const diagnostics = [
+    {
+      title: "Limite anual do IRPJ",
+      text: `${formatCurrency(CONSTANTS.annualLimitIrpj)}. Receita sujeita ao limite em 2026: ${formatCurrency(annual.operationalRevenue)}. ${irpjAboveLimit ? "Há excesso anual de IRPJ." : "Não houve excesso anual de IRPJ."}`,
+    },
+    {
+      title: "Limite anual da CSLL em 2026",
+      text: `${formatCurrency(CONSTANTS.annualLimitCsll2026)}. Receita sujeita ao limite da CSLL (a partir do 2º tri): ${formatCurrency(csllEligibleRevenue)}. ${csllAboveLimit ? "Há excesso anual de CSLL." : "Não houve excesso anual de CSLL."}`,
+    },
+    {
+      title: "Receita financeira",
+      text: `Total anual informado: ${formatCurrency(annual.financialRevenue)}. Ela entra integralmente na base de IRPJ/CSLL, mas não entra no limite de R$ 5 milhões nem na base de PIS/COFINS.`,
+    },
+    {
+      title: "IRRF mensal acumulado",
+      text: `IRRF total informado no ano: ${formatCurrency(annual.withheldIr)}. O app trata esse valor como antecipação/compensação do IRPJ, sem aplicar a redução da LC 224/2025 sobre o IRRF.`,
+    },
+    {
+      title: "Base de PIS/COFINS",
+      text: `Base anual apurada: ${formatCurrency(annual.pisCofinsBase)}. O cálculo exclui devoluções, ICMS informado e receitas monofásicas; receitas financeiras permanecem fora dessa base cumulativa.`,
+    },
+    {
+      title: "Fechamento do 4º trimestre",
+      text: `IRPJ líquido após crédito: ${formatCurrency(annual.irpjNetFourthQuarter)}; saldo negativo remanescente de IRPJ: ${formatCurrency(annual.irpjNegativeBalance)}. CSLL líquida após crédito: ${formatCurrency(annual.csllNetFourthQuarter)}.`,
+    },
+  ];
+
+  container.innerHTML = `<div class="diagnostic-grid">${diagnostics
+    .map(
+      (item) => `
+        <article class="diagnostic-card">
+          <h3>${item.title}</h3>
+          <p>${item.text}</p>
+        </article>
+      `
+    )
+    .join("")}</div>`;
+}
+
 function renderQuarterResults(calculation) {
   calculation.quarterResults.forEach((quarter, index) => {
     const panel = document.getElementById(QUARTERS[index].id);
     const badges = panel.querySelector(".quarter-badges");
+    const rules = panel.querySelector(".quarter-rules");
+    const ledger = panel.querySelector(".quarter-ledger");
+    const diagnostics = panel.querySelector(".quarter-diagnostics");
     const originalIrpj = calculation.irpjOriginal[index];
     const originalCsll = calculation.csllOriginal[index];
     badges.innerHTML = `
@@ -541,6 +628,64 @@ function renderQuarterResults(calculation) {
       <span class="badge ${quarter.irpj.original.excess > 0 ? "warn" : "success"}">Excedente IRPJ: ${formatCurrency(quarter.irpj.original.excess)}</span>
       <span class="badge ${quarter.csll.original.excess > 0 ? "warn" : "success"}">Excedente CSLL: ${formatCurrency(quarter.csll.original.excess)}</span>
       <span class="badge">IRRF trimestral: ${formatCurrency(quarter.withheldIr)}</span>
+    `;
+
+    rules.innerHTML = `
+      ${ruleCard("Alíquotas do trimestre", `
+        IRPJ: presunção de ${formatPercent(CONSTANTS.presumptiveIrpj)} e ${formatPercent(CONSTANTS.presumptiveIrpjExcess)} no excedente.<br>
+        CSLL: presunção de ${formatPercent(CONSTANTS.presumptiveCsll)} e ${formatPercent(CONSTANTS.presumptiveCsllExcess)} no excedente elegível.
+      `)}
+      ${ruleCard("Receita que entra no limite", `
+        Receita sujeita ao limite no trimestre: ${formatCurrency(quarter.operationalRevenue)}.<br>
+        Receita financeira no trimestre: ${formatCurrency(quarter.financialRevenue)} (fora do limite, mas dentro da base de IRPJ/CSLL).
+      `)}
+      ${ruleCard("Limite proporcional e sobra", `
+        Limite disponível para IRPJ neste trimestre: ${formatCurrency(quarter.irpj.original.availableLimit)}.<br>
+        Sobra transportada para o trimestre seguinte: ${formatCurrency(quarter.irpj.original.carryLimitForward)}.
+      `)}
+      ${ruleCard("PIS/COFINS do trimestre", `
+        Base cumulativa: ${formatCurrency(quarter.pisCofins.base)}.<br>
+        PIS ${formatPercent(CONSTANTS.pisRate)} / COFINS ${formatPercent(CONSTANTS.cofinsRate)} sobre faturamento ajustado.
+      `)}
+    `;
+
+    ledger.innerHTML = `
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Mês</th>
+              <th>Faturamento bruto</th>
+              <th>Deduções operacionais</th>
+              <th>Receita sujeita ao limite</th>
+              <th>Receita financeira</th>
+              <th>IRRF</th>
+              <th>ICMS</th>
+              <th>Monofásicos</th>
+              <th>Base PIS/COFINS</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${quarter.months
+              .map(
+                (month) => `
+                  <tr>
+                    <td>${month.name}</td>
+                    <td>${formatCurrency(month.grossRevenue)}</td>
+                    <td>${formatCurrency(month.returns)}</td>
+                    <td>${formatCurrency(month.operationalNetRevenue)}</td>
+                    <td>${formatCurrency(month.financialRevenue)}</td>
+                    <td>${formatCurrency(month.withheldIrMonth)}</td>
+                    <td>${formatCurrency(month.icmsAmount)}</td>
+                    <td>${formatCurrency(month.monophaseRevenue)}</td>
+                    <td>${formatCurrency(month.pisCofinsBase)}</td>
+                  </tr>
+                `
+              )
+              .join("")}
+          </tbody>
+        </table>
+      </div>
     `;
 
     const quarterResults = panel.querySelector(".quarter-results");
@@ -552,6 +697,20 @@ function renderQuarterResults(calculation) {
       ${miniCard("CSLL original / reapurada", `${formatCurrency(quarter.csll.original.grossTax)} / ${formatCurrency(quarter.csll.final.grossTax)}`, `Crédito do recálculo: ${formatCurrency(quarter.csll.credit)}.`)}
       ${miniCard("PIS / COFINS", `${formatCurrency(quarter.pisCofins.pis)} / ${formatCurrency(quarter.pisCofins.cofins)}`, `Total das contribuições do trimestre: ${formatCurrency(quarter.pisCofins.total)}.`)}
     `;
+
+    diagnostics.innerHTML = `
+      <div class="diagnostic-grid">
+        <article class="diagnostic-card">
+          <h3>Leitura técnica do trimestre</h3>
+          <ul class="bullet-list">
+            <li>${quarter.irpj.original.excess > 0 ? `Houve excedente provisório de IRPJ de ${formatCurrency(quarter.irpj.original.excess)}.` : "Não houve excedente provisório de IRPJ no trimestre."}</li>
+            <li>${quarter.csll.original.active ? `A CSLL já está ativa para o acréscimo neste trimestre; excedente provisório apurado: ${formatCurrency(quarter.csll.original.excess)}.` : "A CSLL ainda não sofre acréscimo neste trimestre de 2026."}</li>
+            <li>${quarter.irpj.credit > 0 || quarter.csll.credit > 0 ? `O recálculo anual gerou crédito de ${formatCurrency(quarter.irpj.credit)} em IRPJ e ${formatCurrency(quarter.csll.credit)} em CSLL.` : "Até o momento, este trimestre não gerou crédito adicional no recálculo anual."}</li>
+            <li>Receitas financeiras foram mantidas fora do limite e dentro da base integral de IRPJ/CSLL, conforme o Q&A da Receita.</li>
+          </ul>
+        </article>
+      </div>
+    `;
   });
 }
 
@@ -561,6 +720,15 @@ function miniCard(title, value, note) {
       <h4>${title}</h4>
       <div class="value">${value}</div>
       <p class="table-note">${note}</p>
+    </article>
+  `;
+}
+
+function ruleCard(title, text) {
+  return `
+    <article class="rule-card">
+      <h3>${title}</h3>
+      <p>${text}</p>
     </article>
   `;
 }
@@ -723,6 +891,7 @@ function renderDetailedOutput(calculation) {
         <tr>
           <td>${quarter.quarterLabel}</td>
           <td>${formatCurrency(quarter.grossRevenue)}</td>
+          <td>${formatCurrency(quarter.returns)}</td>
           <td>${formatCurrency(quarter.icmsAmount)}</td>
           <td>${formatCurrency(quarter.monophaseRevenue)}</td>
           <td>${formatCurrency(quarter.pisCofins.base)}</td>
@@ -803,6 +972,7 @@ function renderDetailedOutput(calculation) {
           <tr>
             <th>PIS/COFINS cumulativos</th>
             <th>Receita bruta</th>
+            <th>Devoluções excluídas</th>
             <th>ICMS excluído</th>
             <th>Monofásicos excluídos</th>
             <th>Base final</th>
@@ -824,10 +994,13 @@ function buildExportPayload(calculation) {
       regime: "Lucro Presumido",
       segmento: "Comércio",
       dataExportacao: new Date().toISOString(),
+      referenciasPerguntasRespostas: LEGAL_REFERENCES,
       observacoes: [
         "IRPJ com presunção de 8% e 8,8% no excedente trimestral/anual.",
         "CSLL com presunção de 12% e 13,2% a partir do 2º trimestre de 2026.",
         "Receitas financeiras entram integralmente na base de IRPJ/CSLL.",
+        "Receitas financeiras não entram no limite anual/proporcional do acréscimo dos percentuais.",
+        "IRRF não sofre a redução da LC 224/2025 e é tratado apenas como compensação do IRPJ.",
         "PIS/COFINS cumulativos usam base operacional com exclusão de ICMS informado e monofásicos.",
       ],
     },
@@ -901,6 +1074,10 @@ function toXml(payload) {
     <regime>${escapeXml(payload.metadata.regime)}</regime>
     <segmento>${escapeXml(payload.metadata.segmento)}</segmento>
     <dataExportacao>${payload.metadata.dataExportacao}</dataExportacao>
+    <observacoes>${payload.metadata.observacoes.map((item) => `<item>${escapeXml(item)}</item>`).join("")}</observacoes>
+    <perguntasRespostas>${payload.metadata.referenciasPerguntasRespostas
+      .map((item) => `<referencia><titulo>${escapeXml(item.title)}</titulo><texto>${escapeXml(item.text)}</texto></referencia>`)
+      .join("")}</perguntasRespostas>
   </metadata>
   <anual>
     <receitaBruta>${payload.annual.grossRevenue.toFixed(2)}</receitaBruta>
@@ -955,6 +1132,7 @@ function exportPdf() {
           <div class="card"><strong>COFINS</strong>${formatCurrency(calculation.annual.cofins)}</div>
           <div class="card"><strong>Crédito IRPJ + CSLL</strong>${formatCurrency(calculation.annual.irpjCredit + calculation.annual.csllCredit)}</div>
         </div>
+        ${document.getElementById("annualDiagnostics").innerHTML}
         ${document.getElementById("recalcTables").innerHTML}
         ${document.getElementById("detailedOutput").innerHTML}
       </body>

@@ -33,12 +33,27 @@
           <li><strong>IRPJ:</strong> presunção de 8% até o limite e 8,8% no excedente; alíquota de 15% + adicional de 10% sobre a base trimestral que exceder R$ 60.000,00.</li>
           <li><strong>CSLL:</strong> presunção de 12% até o limite e 13,2% no excedente; em 2026 o acréscimo só começa no 2º trimestre.</li>
           <li><strong>Receita financeira:</strong> entra integralmente na base de IRPJ/CSLL e fica fora da base de PIS/COFINS cumulativos.</li>
+          <li><strong>Limite de R$ 5 milhões:</strong> considera apenas receitas sujeitas aos coeficientes de presunção; receitas financeiras e ganhos computados integralmente não entram nesse limite.</li>
           <li><strong>PIS/COFINS cumulativos:</strong> calculados só sobre faturamento operacional ajustado, com exclusão de ICMS destacado e receita monofásica informada.</li>
+          <li><strong>IRRF:</strong> não sofre a redução da LC 224/2025; aqui ele é tratado como antecipação/compensação no IRPJ trimestral.</li>
           <li><strong>Recálculo anual:</strong> redistribui ou zera o excedente trimestral quando o total do ano não sustenta o excesso apurado ao longo dos trimestres.</li>
         </ul>
       </section>
 
+      <section class="legal-card">
+        <h2>Destaques do Perguntas e Respostas da Receita usados no app</h2>
+        <div class="reference-grid" id="referenceGrid"></div>
+      </section>
+
       <section class="summary-grid" id="annualSummary"></section>
+
+      <section class="report-card">
+        <div class="section-title-row">
+          <h2>Diagnóstico anual</h2>
+          <span class="muted">Leitura rápida dos limites, exceções e efeitos do recálculo de final de ano.</span>
+        </div>
+        <div id="annualDiagnostics"></div>
+      </section>
 
       <section class="tabs-card">
         <div class="quarter-tabs" id="quarterTabs"></div>
@@ -71,9 +86,12 @@
           </div>
           <div class="quarter-badges"></div>
         </div>
+        <div class="quarter-rules"></div>
         <div class="month-tabs"></div>
         <div class="month-panels"></div>
+        <div class="quarter-ledger"></div>
         <div class="quarter-results"></div>
+        <div class="quarter-diagnostics"></div>
       </section>
     </template>
 

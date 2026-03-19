@@ -15,7 +15,9 @@ Aplicativo HTML estático para cálculo de Lucro Presumido de empresas de comér
 - Comércio apenas.
 - IRPJ com base presumida de 8% e 8,8% no excedente.
 - CSLL com base presumida de 12% e 13,2% a partir do 2º trimestre de 2026.
+- Receita sujeita ao limite separada das receitas financeiras, conforme o Perguntas e Respostas da Receita.
 - Receitas financeiras somadas integralmente ao IRPJ/CSLL.
 - IRRF mensal acumulado por trimestre.
 - PIS/COFINS cumulativos com exclusão de ICMS informado e receita monofásica informada.
 - Recálculo anual com crédito para o 4º trimestre.
+- Diagnóstico anual e quadros explicativos com regras derivadas do Perguntas e Respostas da Receita Federal.
