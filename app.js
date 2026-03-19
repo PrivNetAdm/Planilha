@@ -73,6 +73,39 @@ const LEGAL_REFERENCES = [
   },
 ];
 
+const EXAMPLE_SCENARIOS = [
+  { id: "example1", label: "Exemplo 1", description: "Sem excedente", revenues: [1000000, 800000, 1200000, 700000] },
+  { id: "example2", label: "Exemplo 2", description: "Excedente no ano < R$ 5 mi", revenues: [1400000, 800000, 1700000, 700000] },
+  { id: "example3", label: "Exemplo 3", description: "Excesso apurado > excesso anual", revenues: [1600000, 2400000, 2650000, 700000] },
+  { id: "example4", label: "Exemplo 4", description: "Excesso anual pleno", revenues: [2600000, 3700000, 2800000, 1600000] },
+];
+
+const ACCOUNTING_NOTES = [
+  {
+    title: "Lançamentos do 1º ao 3º trimestre",
+    items: [
+      "D – (-) Provisão para Imposto de Renda / C – IRPJ a Recolher.",
+      "D – (-) Provisão para CSLL / C – CSLL a Recolher.",
+      "Ajustar a provisão trimestral pela diferença entre o valor apurado e as provisões mensais já registradas.",
+    ],
+  },
+  {
+    title: "Lançamentos do 4º trimestre",
+    items: [
+      "Repetir a constituição/ajuste da provisão de IRPJ e CSLL do trimestre.",
+      "Se houver crédito de recálculo: D – IRPJ/CSLL Crédito Recálculo (AC) / C – (-) Provisão correspondente.",
+      "Na utilização do crédito: D – IRPJ/CSLL a Recolher / C – IRPJ/CSLL Crédito Recálculo.",
+    ],
+  },
+  {
+    title: "Receita Soluciona e regime de caixa",
+    items: [
+      "Se a empresa apura pelo regime de caixa, informe no dashboard os valores efetivamente recebidos, pois o controle deve seguir o critério adotado pela empresa.",
+      "Como o material aponta ausência de previsão legal expressa para alguns detalhes do regime de caixa, o ideal é validar casos sensíveis via Receita Soluciona / entidade de classe.",
+    ],
+  },
+];
+
 const storageKey = "planilha-lucro-presumido-2026-comercio";
 let state = loadState();
 const uiState = {
@@ -82,6 +115,7 @@ const uiState = {
 
 function createDefaultState() {
   return {
+    recognitionRegime: "competencia",
     quarters: QUARTERS.map((quarter) => ({
       id: quarter.id,
       months: quarter.months.map((name) => ({
@@ -111,6 +145,9 @@ function loadState() {
 function mergeWithDefault(partial) {
   const base = createDefaultState();
   if (!partial?.quarters) return base;
+  if (partial.recognitionRegime === "caixa" || partial.recognitionRegime === "competencia") {
+    base.recognitionRegime = partial.recognitionRegime;
+  }
 
   base.quarters.forEach((quarter, qIndex) => {
     const savedQuarter = partial.quarters[qIndex];
@@ -157,6 +194,8 @@ function formatPercent(value) {
 
 function renderApp() {
   renderReferenceGrid();
+  renderScenarioActions();
+  renderRecognitionRegime();
   renderQuarterStructure();
   const calculation = calculateAll();
   renderAnnualSummary(calculation);
@@ -164,6 +203,7 @@ function renderApp() {
   renderQuarterResults(calculation);
   renderRecalcTables(calculation);
   renderDetailedOutput(calculation);
+  renderAccountingNotes();
 }
 
 function renderReferenceGrid() {
@@ -174,6 +214,34 @@ function renderReferenceGrid() {
       <p>${item.text}</p>
     </article>
   `).join("");
+}
+
+function renderRecognitionRegime() {
+  const select = document.getElementById("recognitionRegime");
+  select.value = state.recognitionRegime;
+}
+
+function renderScenarioActions() {
+  const container = document.getElementById("scenarioActions");
+  container.innerHTML = EXAMPLE_SCENARIOS.map((scenario) => `
+    <button type="button" class="scenario-btn" data-scenario="${scenario.id}">
+      ${scenario.label} - ${scenario.description}
+    </button>
+  `).join("");
+
+  container.querySelectorAll("[data-scenario]").forEach((button) => {
+    button.addEventListener("click", () => loadExampleScenario(button.dataset.scenario));
+  });
+}
+
+function renderAccountingNotes() {
+  const container = document.getElementById("accountingNotes");
+  container.innerHTML = `<div class="diagnostic-grid">${ACCOUNTING_NOTES.map((note) => `
+    <article class="diagnostic-card">
+      <h3>${note.title}</h3>
+      <ul class="bullet-list">${note.items.map((item) => `<li>${item}</li>`).join("")}</ul>
+    </article>
+  `).join("")}</div>`;
 }
 
 function renderQuarterStructure() {
@@ -195,7 +263,7 @@ function renderQuarterStructure() {
     panel.id = quarter.id;
     if (uiState.activeQuarter === quarter.id) panel.classList.remove("hidden");
     panel.querySelector(".quarter-title").textContent = quarter.label;
-    panel.querySelector(".quarter-subtitle").textContent = `Meses: ${quarter.months.join(", ")}. Informe receitas, ICMS e IRRF mês a mês.`;
+    panel.querySelector(".quarter-subtitle").textContent = `Meses: ${quarter.months.join(", ")}. Informe receitas, ICMS e IRRF mês a mês conforme o regime de ${state.recognitionRegime === "caixa" ? "caixa" : "competência"}.`;
 
     const monthTabs = panel.querySelector(".month-tabs");
     const monthPanels = panel.querySelector(".month-panels");
@@ -271,6 +339,29 @@ function activateMonth(quarterPanel, targetId) {
   quarterPanel.querySelectorAll(".month-panel").forEach((panel) => {
     panel.classList.toggle("hidden", panel.id !== targetId);
   });
+}
+
+function loadExampleScenario(scenarioId) {
+  const scenario = EXAMPLE_SCENARIOS.find((item) => item.id === scenarioId);
+  if (!scenario) return;
+
+  state = createDefaultState();
+  state.recognitionRegime = document.getElementById("recognitionRegime")?.value || "competencia";
+
+  scenario.revenues.forEach((quarterRevenue, quarterIndex) => {
+    const monthlyShare = quarterRevenue / 3;
+    state.quarters[quarterIndex].months.forEach((month) => {
+      month.grossRevenue = monthlyShare;
+      month.returns = 0;
+      month.financialRevenue = 0;
+      month.withheldIrMonth = 0;
+      month.icmsAmount = 0;
+      month.monophaseRevenue = 0;
+    });
+  });
+
+  saveState();
+  renderApp();
 }
 
 function calculateAll() {
@@ -587,6 +678,10 @@ function renderAnnualDiagnostics(calculation) {
     {
       title: "Receita financeira",
       text: `Total anual informado: ${formatCurrency(annual.financialRevenue)}. Ela entra integralmente na base de IRPJ/CSLL, mas não entra no limite de R$ 5 milhões nem na base de PIS/COFINS.`,
+    },
+    {
+      title: "Regime adotado no dashboard",
+      text: `Regime selecionado: ${state.recognitionRegime === "caixa" ? "Caixa" : "Competência"}. O app usa esse campo como orientação operacional para lembrar se os valores mensais lançados devem representar receita recebida ou auferida.`,
     },
     {
       title: "IRRF mensal acumulado",
@@ -993,6 +1088,7 @@ function buildExportPayload(calculation) {
       aplicativo: "Dashboard Lucro Presumido 2026 - Comércio",
       regime: "Lucro Presumido",
       segmento: "Comércio",
+      reconhecimentoReceita: state.recognitionRegime,
       dataExportacao: new Date().toISOString(),
       referenciasPerguntasRespostas: LEGAL_REFERENCES,
       observacoes: [
@@ -1073,6 +1169,7 @@ function toXml(payload) {
     <aplicativo>${escapeXml(payload.metadata.aplicativo)}</aplicativo>
     <regime>${escapeXml(payload.metadata.regime)}</regime>
     <segmento>${escapeXml(payload.metadata.segmento)}</segmento>
+    <reconhecimentoReceita>${escapeXml(payload.metadata.reconhecimentoReceita)}</reconhecimentoReceita>
     <dataExportacao>${payload.metadata.dataExportacao}</dataExportacao>
     <observacoes>${payload.metadata.observacoes.map((item) => `<item>${escapeXml(item)}</item>`).join("")}</observacoes>
     <perguntasRespostas>${payload.metadata.referenciasPerguntasRespostas
@@ -1175,12 +1272,19 @@ function timestampForFile() {
   ].join("");
 }
 
+document.getElementById("recognitionRegime").addEventListener("change", (event) => {
+  state.recognitionRegime = event.target.value;
+  saveState();
+  renderApp();
+});
 document.getElementById("recalculateBtn").addEventListener("click", () => renderApp());
 document.getElementById("exportXmlBtn").addEventListener("click", exportXml);
 document.getElementById("exportPdfBtn").addEventListener("click", exportPdf);
 document.getElementById("resetBtn").addEventListener("click", () => {
   if (!window.confirm("Deseja limpar todos os dados informados?")) return;
+  const currentRegime = state.recognitionRegime;
   state = createDefaultState();
+  state.recognitionRegime = currentRegime;
   saveState();
   renderApp();
 });

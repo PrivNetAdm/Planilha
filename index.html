@@ -19,12 +19,27 @@
           </p>
         </div>
         <div class="hero-actions">
+          <label class="control-stack" for="recognitionRegime">
+            <span>Regime de reconhecimento da receita</span>
+            <select id="recognitionRegime">
+              <option value="competencia">Competência</option>
+              <option value="caixa">Caixa</option>
+            </select>
+          </label>
           <button id="recalculateBtn" class="primary">Calcular tudo</button>
           <button id="exportXmlBtn">Gerar XML</button>
           <button id="exportPdfBtn">Gerar PDF</button>
           <button id="resetBtn" class="danger ghost">Limpar dados</button>
         </div>
       </header>
+
+      <section class="legal-card">
+        <div class="section-title-row">
+          <h2>Cenários prontos da palestra</h2>
+          <span class="muted">Atalhos para carregar rapidamente os exemplos de conferência apresentados no material.</span>
+        </div>
+        <div class="scenario-actions" id="scenarioActions"></div>
+      </section>
 
       <section class="legal-card">
         <h2>Regras consideradas nesta versão</h2>
@@ -74,6 +89,14 @@
           <span class="muted">Quadros prontos para auditoria interna e conferência do escritório.</span>
         </div>
         <div id="detailedOutput"></div>
+      </section>
+
+      <section class="report-card">
+        <div class="section-title-row">
+          <h2>Aspectos contábeis e observações operacionais</h2>
+          <span class="muted">Resumo dos lançamentos e alertas operacionais extraídos do material enviado.</span>
+        </div>
+        <div id="accountingNotes"></div>
       </section>
     </div>
 
