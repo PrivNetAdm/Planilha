@@ -1,0 +1,1292 @@
+const QUARTERS = [
+  { id: "q1", label: "1º Trimestre", months: ["Janeiro", "Fevereiro", "Março"] },
+  { id: "q2", label: "2º Trimestre", months: ["Abril", "Maio", "Junho"] },
+  { id: "q3", label: "3º Trimestre", months: ["Julho", "Agosto", "Setembro"] },
+  { id: "q4", label: "4º Trimestre", months: ["Outubro", "Novembro", "Dezembro"] },
+];
+
+const MONTH_FIELDS = [
+  {
+    key: "grossRevenue",
+    label: "Faturamento bruto do mês",
+    hint: "Receita bruta operacional do comércio no mês.",
+  },
+  {
+    key: "returns",
+    label: "Devoluções / cancelamentos / descontos incondicionais",
+    hint: "Reduções operacionais para IRPJ/CSLL.",
+  },
+  {
+    key: "financialRevenue",
+    label: "Receita financeira bruta",
+    hint: "Entra 100% na base de IRPJ/CSLL; não entra em PIS/COFINS cumulativos.",
+  },
+  {
+    key: "withheldIrMonth",
+    label: "IRRF do mês sobre receitas financeiras",
+    hint: "Compensável no IRPJ do trimestre.",
+  },
+  {
+    key: "icmsAmount",
+    label: "ICMS destacado do mês",
+    hint: "Usado para exclusão da base de PIS/COFINS conforme informado por você.",
+  },
+  {
+    key: "monophaseRevenue",
+    label: "Receita monofásica do mês",
+    hint: "Também fica fora da base de PIS/COFINS deste dashboard.",
+  },
+];
+
+const CONSTANTS = {
+  quarterlyLimit: 1250000,
+  annualLimitIrpj: 5000000,
+  annualLimitCsll2026: 3750000,
+  presumptiveIrpj: 0.08,
+  presumptiveIrpjExcess: 0.088,
+  presumptiveCsll: 0.12,
+  presumptiveCsllExcess: 0.132,
+  irpjRate: 0.15,
+  irpjAdditionalRate: 0.1,
+  irpjAdditionalThreshold: 60000,
+  csllRate: 0.09,
+  pisRate: 0.0065,
+  cofinsRate: 0.03,
+};
+
+const LEGAL_REFERENCES = [
+  {
+    title: "Q11 - Excedente no lucro presumido",
+    text: "O acréscimo de 10% incide apenas sobre a parcela da receita bruta sujeita à presunção que exceder o limite trimestral/anual.",
+  },
+  {
+    title: "Q11.1 - Receitas financeiras fora do limite",
+    text: "Receitas financeiras entram 100% na base de IRPJ/CSLL, mas não entram no limite de R$ 5.000.000,00 nem no proporcional trimestral.",
+  },
+  {
+    title: "Q12 + Q13 - Início da CSLL em 2026",
+    text: "Para 2026, o acréscimo vale para IRPJ desde o 1º trimestre e para CSLL somente a partir do 2º trimestre, com limite anual de R$ 3.750.000,00.",
+  },
+  {
+    title: "Q15 - IRRF fora da redução",
+    text: "A LC 224/2025 não alcança o IRRF. Neste app, o IRRF mensal é tratado apenas como antecipação/compensação do IRPJ.",
+  },
+];
+
+const EXAMPLE_SCENARIOS = [
+  { id: "example1", label: "Exemplo 1", description: "Sem excedente", revenues: [1000000, 800000, 1200000, 700000] },
+  { id: "example2", label: "Exemplo 2", description: "Excedente no ano < R$ 5 mi", revenues: [1400000, 800000, 1700000, 700000] },
+  { id: "example3", label: "Exemplo 3", description: "Excesso apurado > excesso anual", revenues: [1600000, 2400000, 2650000, 700000] },
+  { id: "example4", label: "Exemplo 4", description: "Excesso anual pleno", revenues: [2600000, 3700000, 2800000, 1600000] },
+];
+
+const ACCOUNTING_NOTES = [
+  {
+    title: "Lançamentos do 1º ao 3º trimestre",
+    items: [
+      "D – (-) Provisão para Imposto de Renda / C – IRPJ a Recolher.",
+      "D – (-) Provisão para CSLL / C – CSLL a Recolher.",
+      "Ajustar a provisão trimestral pela diferença entre o valor apurado e as provisões mensais já registradas.",
+    ],
+  },
+  {
+    title: "Lançamentos do 4º trimestre",
+    items: [
+      "Repetir a constituição/ajuste da provisão de IRPJ e CSLL do trimestre.",
+      "Se houver crédito de recálculo: D – IRPJ/CSLL Crédito Recálculo (AC) / C – (-) Provisão correspondente.",
+      "Na utilização do crédito: D – IRPJ/CSLL a Recolher / C – IRPJ/CSLL Crédito Recálculo.",
+    ],
+  },
+  {
+    title: "Receita Soluciona e regime de caixa",
+    items: [
+      "Se a empresa apura pelo regime de caixa, informe no dashboard os valores efetivamente recebidos, pois o controle deve seguir o critério adotado pela empresa.",
+      "Como o material aponta ausência de previsão legal expressa para alguns detalhes do regime de caixa, o ideal é validar casos sensíveis via Receita Soluciona / entidade de classe.",
+    ],
+  },
+];
+
+const storageKey = "planilha-lucro-presumido-2026-comercio";
+let state = loadState();
+const uiState = {
+  activeQuarter: QUARTERS[0].id,
+  activeMonths: Object.fromEntries(QUARTERS.map((quarter) => [quarter.id, `${quarter.id}-m0`])),
+};
+
+function createDefaultState() {
+  return {
+    recognitionRegime: "competencia",
+    quarters: QUARTERS.map((quarter) => ({
+      id: quarter.id,
+      months: quarter.months.map((name) => ({
+        name,
+        grossRevenue: 0,
+        returns: 0,
+        financialRevenue: 0,
+        withheldIrMonth: 0,
+        icmsAmount: 0,
+        monophaseRevenue: 0,
+      })),
+    })),
+  };
+}
+
+function loadState() {
+  try {
+    const saved = localStorage.getItem(storageKey);
+    if (!saved) return createDefaultState();
+    const parsed = JSON.parse(saved);
+    return mergeWithDefault(parsed);
+  } catch {
+    return createDefaultState();
+  }
+}
+
+function mergeWithDefault(partial) {
+  const base = createDefaultState();
+  if (!partial?.quarters) return base;
+  if (partial.recognitionRegime === "caixa" || partial.recognitionRegime === "competencia") {
+    base.recognitionRegime = partial.recognitionRegime;
+  }
+
+  base.quarters.forEach((quarter, qIndex) => {
+    const savedQuarter = partial.quarters[qIndex];
+    if (!savedQuarter?.months) return;
+    quarter.months.forEach((month, mIndex) => {
+      const savedMonth = savedQuarter.months[mIndex] || {};
+      Object.keys(month).forEach((field) => {
+        if (field === "name") return;
+        month[field] = sanitizeNumber(savedMonth[field]);
+      });
+    });
+  });
+
+  return base;
+}
+
+function saveState() {
+  localStorage.setItem(storageKey, JSON.stringify(state));
+}
+
+function sanitizeNumber(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  if (typeof value !== "string") return 0;
+  const normalized = value
+    .trim()
+    .replace(/\s+/g, "")
+    .replace(/\./g, "")
+    .replace(/,/g, ".")
+    .replace(/[^0-9.-]/g, "");
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatCurrency(value) {
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  }).format(value || 0);
+}
+
+function formatPercent(value) {
+  return `${(value * 100).toFixed(2).replace(".", ",")}%`;
+}
+
+function renderApp() {
+  renderReferenceGrid();
+  renderScenarioActions();
+  renderRecognitionRegime();
+  renderQuarterStructure();
+  const calculation = calculateAll();
+  renderAnnualSummary(calculation);
+  renderAnnualDiagnostics(calculation);
+  renderQuarterResults(calculation);
+  renderRecalcTables(calculation);
+  renderDetailedOutput(calculation);
+  renderAccountingNotes();
+}
+
+function renderReferenceGrid() {
+  const container = document.getElementById("referenceGrid");
+  container.innerHTML = LEGAL_REFERENCES.map((item) => `
+    <article class="reference-card">
+      <h3>${item.title}</h3>
+      <p>${item.text}</p>
+    </article>
+  `).join("");
+}
+
+function renderRecognitionRegime() {
+  const select = document.getElementById("recognitionRegime");
+  select.value = state.recognitionRegime;
+}
+
+function renderScenarioActions() {
+  const container = document.getElementById("scenarioActions");
+  container.innerHTML = EXAMPLE_SCENARIOS.map((scenario) => `
+    <button type="button" class="scenario-btn" data-scenario="${scenario.id}">
+      ${scenario.label} - ${scenario.description}
+    </button>
+  `).join("");
+
+  container.querySelectorAll("[data-scenario]").forEach((button) => {
+    button.addEventListener("click", () => loadExampleScenario(button.dataset.scenario));
+  });
+}
+
+function renderAccountingNotes() {
+  const container = document.getElementById("accountingNotes");
+  container.innerHTML = `<div class="diagnostic-grid">${ACCOUNTING_NOTES.map((note) => `
+    <article class="diagnostic-card">
+      <h3>${note.title}</h3>
+      <ul class="bullet-list">${note.items.map((item) => `<li>${item}</li>`).join("")}</ul>
+    </article>
+  `).join("")}</div>`;
+}
+
+function renderQuarterStructure() {
+  const quarterTabs = document.getElementById("quarterTabs");
+  const quarterPanels = document.getElementById("quarterPanels");
+  quarterTabs.innerHTML = "";
+  quarterPanels.innerHTML = "";
+
+  QUARTERS.forEach((quarter, qIndex) => {
+    const tab = document.createElement("button");
+    tab.className = `quarter-tab ${uiState.activeQuarter === quarter.id ? "active" : ""}`;
+    tab.textContent = quarter.label;
+    tab.type = "button";
+    tab.dataset.target = quarter.id;
+    tab.addEventListener("click", () => activateQuarter(quarter.id));
+    quarterTabs.appendChild(tab);
+
+    const panel = document.getElementById("quarterPanelTemplate").content.firstElementChild.cloneNode(true);
+    panel.id = quarter.id;
+    if (uiState.activeQuarter === quarter.id) panel.classList.remove("hidden");
+    panel.querySelector(".quarter-title").textContent = quarter.label;
+    panel.querySelector(".quarter-subtitle").textContent = `Meses: ${quarter.months.join(", ")}. Informe receitas, ICMS e IRRF mês a mês conforme o regime de ${state.recognitionRegime === "caixa" ? "caixa" : "competência"}.`;
+
+    const monthTabs = panel.querySelector(".month-tabs");
+    const monthPanels = panel.querySelector(".month-panels");
+
+    quarter.months.forEach((monthName, mIndex) => {
+      const monthTab = document.createElement("button");
+      const monthId = `${quarter.id}-m${mIndex}`;
+      monthTab.className = `month-tab ${uiState.activeMonths[quarter.id] === monthId ? "active" : ""}`;
+      monthTab.type = "button";
+      monthTab.textContent = monthName;
+      monthTab.dataset.target = monthId;
+      monthTab.addEventListener("click", () => activateMonth(panel, monthTab.dataset.target));
+      monthTabs.appendChild(monthTab);
+
+      const monthPanel = document.getElementById("monthPanelTemplate").content.firstElementChild.cloneNode(true);
+      monthPanel.id = monthId;
+      if (uiState.activeMonths[quarter.id] === monthId) monthPanel.classList.remove("hidden");
+      const monthGrid = monthPanel.querySelector(".month-grid");
+      const monthState = state.quarters[qIndex].months[mIndex];
+
+      MONTH_FIELDS.forEach((field) => {
+        const fieldCard = document.createElement("div");
+        fieldCard.className = "field-card";
+
+        const label = document.createElement("label");
+        label.setAttribute("for", `${quarter.id}-${mIndex}-${field.key}`);
+        label.textContent = field.label;
+
+        const input = document.createElement("input");
+        input.id = `${quarter.id}-${mIndex}-${field.key}`;
+        input.type = "text";
+        input.inputMode = "decimal";
+        input.value = monthState[field.key] ? monthState[field.key].toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "";
+        input.placeholder = "0,00";
+        input.addEventListener("change", (event) => {
+          const value = sanitizeNumber(event.target.value);
+          state.quarters[qIndex].months[mIndex][field.key] = value;
+          event.target.value = value ? value.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "";
+          saveState();
+          renderApp();
+        });
+
+        const hint = document.createElement("span");
+        hint.className = "hint";
+        hint.textContent = field.hint;
+
+        fieldCard.append(label, input, hint);
+        monthGrid.appendChild(fieldCard);
+      });
+
+      monthPanels.appendChild(monthPanel);
+    });
+
+    quarterPanels.appendChild(panel);
+  });
+}
+
+function activateQuarter(targetId) {
+  uiState.activeQuarter = targetId;
+  document.querySelectorAll(".quarter-tab").forEach((button) => {
+    button.classList.toggle("active", button.dataset.target === targetId);
+  });
+  document.querySelectorAll(".quarter-panel").forEach((panel) => {
+    panel.classList.toggle("hidden", panel.id !== targetId);
+  });
+}
+
+function activateMonth(quarterPanel, targetId) {
+  uiState.activeMonths[quarterPanel.id] = targetId;
+  quarterPanel.querySelectorAll(".month-tab").forEach((button) => {
+    button.classList.toggle("active", button.dataset.target === targetId);
+  });
+  quarterPanel.querySelectorAll(".month-panel").forEach((panel) => {
+    panel.classList.toggle("hidden", panel.id !== targetId);
+  });
+}
+
+function loadExampleScenario(scenarioId) {
+  const scenario = EXAMPLE_SCENARIOS.find((item) => item.id === scenarioId);
+  if (!scenario) return;
+
+  state = createDefaultState();
+  state.recognitionRegime = document.getElementById("recognitionRegime")?.value || "competencia";
+
+  scenario.revenues.forEach((quarterRevenue, quarterIndex) => {
+    const monthlyShare = quarterRevenue / 3;
+    state.quarters[quarterIndex].months.forEach((month) => {
+      month.grossRevenue = monthlyShare;
+      month.returns = 0;
+      month.financialRevenue = 0;
+      month.withheldIrMonth = 0;
+      month.icmsAmount = 0;
+      month.monophaseRevenue = 0;
+    });
+  });
+
+  saveState();
+  renderApp();
+}
+
+function calculateAll() {
+  const quarterInputs = state.quarters.map((quarter, index) => calculateQuarterInput(quarter, index));
+  const irpjOriginal = calculateOriginalExcessSeries(quarterInputs, {
+    startQuarterIndex: 0,
+    annualLimit: CONSTANTS.annualLimitIrpj,
+  });
+  const csllOriginal = calculateOriginalExcessSeries(quarterInputs, {
+    startQuarterIndex: 1,
+    annualLimit: CONSTANTS.annualLimitCsll2026,
+  });
+
+  const irpjFinal = calculateFinalExcessSeries(irpjOriginal, CONSTANTS.annualLimitIrpj);
+  const csllFinal = calculateFinalExcessSeries(csllOriginal, CONSTANTS.annualLimitCsll2026);
+
+  const quarterResults = quarterInputs.map((input, index) => {
+    const irpj = buildIrpjQuarterResult(input, irpjOriginal[index], irpjFinal[index]);
+    const csll = buildCsllQuarterResult(input, csllOriginal[index], csllFinal[index]);
+    const pisCofins = buildPisCofinsQuarterResult(input);
+    return { ...input, irpj, csll, pisCofins };
+  });
+
+  const annual = buildAnnualSummary(quarterResults);
+  return { quarterResults, annual, irpjOriginal, irpjFinal, csllOriginal, csllFinal };
+}
+
+function calculateQuarterInput(quarterState, quarterIndex) {
+  const months = quarterState.months.map((month) => ({
+    ...month,
+    operationalNetRevenue: Math.max(month.grossRevenue - month.returns, 0),
+    pisCofinsBase: Math.max(month.grossRevenue - month.returns - month.icmsAmount - month.monophaseRevenue, 0),
+  }));
+
+  return {
+    quarterIndex,
+    quarterLabel: QUARTERS[quarterIndex].label,
+    months,
+    grossRevenue: sum(months, "grossRevenue"),
+    returns: sum(months, "returns"),
+    operationalRevenue: sum(months, "operationalNetRevenue"),
+    financialRevenue: sum(months, "financialRevenue"),
+    withheldIr: sum(months, "withheldIrMonth"),
+    icmsAmount: sum(months, "icmsAmount"),
+    monophaseRevenue: sum(months, "monophaseRevenue"),
+    pisCofinsBase: sum(months, "pisCofinsBase"),
+  };
+}
+
+function sum(items, key) {
+  return items.reduce((total, item) => total + (Number(item[key]) || 0), 0);
+}
+
+function calculateOriginalExcessSeries(quarterInputs, options) {
+  const results = [];
+  let carryLimit = 0;
+  let eligibleRevenueTotal = 0;
+
+  quarterInputs.forEach((quarter, index) => {
+    const active = index >= options.startQuarterIndex;
+    const availableLimit = active ? CONSTANTS.quarterlyLimit + carryLimit : 0;
+    const operationalRevenue = active ? quarter.operationalRevenue : 0;
+    const withinLimit = active ? Math.min(operationalRevenue, availableLimit) : quarter.operationalRevenue;
+    const excess = active ? Math.max(operationalRevenue - availableLimit, 0) : 0;
+    carryLimit = active ? Math.max(availableLimit - operationalRevenue, 0) : 0;
+    eligibleRevenueTotal += operationalRevenue;
+
+    results.push({
+      quarterIndex: index,
+      active,
+      operationalRevenue,
+      availableLimit,
+      withinLimit,
+      excess,
+      carryLimitForward: carryLimit,
+      eligibleRevenueTotal,
+      annualLimit: options.annualLimit,
+    });
+  });
+
+  return results;
+}
+
+function calculateFinalExcessSeries(originalSeries, annualLimit) {
+  const eligibleRevenueTotal = originalSeries.reduce((sumValue, item) => sumValue + (item.active ? item.operationalRevenue : 0), 0);
+  const annualExcess = Math.max(eligibleRevenueTotal - annualLimit, 0);
+  const originalExcessTotal = originalSeries.reduce((sumValue, item) => sumValue + item.excess, 0);
+
+  if (annualExcess <= 0) {
+    return originalSeries.map((item) => ({
+      ...item,
+      finalExcess: 0,
+      adjustmentType: item.excess > 0 ? "zerado-no-recalculo" : "sem-excesso",
+    }));
+  }
+
+  if (originalExcessTotal <= annualExcess || originalExcessTotal === 0) {
+    return originalSeries.map((item) => ({
+      ...item,
+      finalExcess: item.excess,
+      adjustmentType: item.excess > 0 ? "mantido" : "sem-excesso",
+    }));
+  }
+
+  return originalSeries.map((item) => ({
+    ...item,
+    finalExcess: item.excess > 0 ? annualExcess * (item.excess / originalExcessTotal) : 0,
+    adjustmentType: item.excess > 0 ? "redistribuido" : "sem-excesso",
+  }));
+}
+
+function buildIrpjQuarterResult(input, original, final) {
+  const originalBaseRegular = original.withinLimit * CONSTANTS.presumptiveIrpj;
+  const originalBaseExcess = original.excess * CONSTANTS.presumptiveIrpjExcess;
+  const originalFinancialBase = input.financialRevenue;
+  const originalBaseTotal = originalBaseRegular + originalBaseExcess + originalFinancialBase;
+  const originalBaseAdditional = Math.max(originalBaseTotal - CONSTANTS.irpjAdditionalThreshold, 0);
+  const originalTaxMain = originalBaseTotal * CONSTANTS.irpjRate;
+  const originalTaxAdditional = originalBaseAdditional * CONSTANTS.irpjAdditionalRate;
+  const originalGrossTax = originalTaxMain + originalTaxAdditional;
+  const originalNetTax = Math.max(originalGrossTax - input.withheldIr, 0);
+
+  const finalBaseRegular = (input.operationalRevenue - final.finalExcess) * CONSTANTS.presumptiveIrpj;
+  const finalBaseExcess = final.finalExcess * CONSTANTS.presumptiveIrpjExcess;
+  const finalFinancialBase = input.financialRevenue;
+  const finalBaseTotal = finalBaseRegular + finalBaseExcess + finalFinancialBase;
+  const finalBaseAdditional = Math.max(finalBaseTotal - CONSTANTS.irpjAdditionalThreshold, 0);
+  const finalTaxMain = finalBaseTotal * CONSTANTS.irpjRate;
+  const finalTaxAdditional = finalBaseAdditional * CONSTANTS.irpjAdditionalRate;
+  const finalGrossTax = finalTaxMain + finalTaxAdditional;
+  const finalNetTax = Math.max(finalGrossTax - input.withheldIr, 0);
+  const credit = Math.max(originalGrossTax - finalGrossTax, 0);
+
+  return {
+    original: {
+      withinLimit: original.withinLimit,
+      excess: original.excess,
+      baseRegular: originalBaseRegular,
+      baseExcess: originalBaseExcess,
+      financialBase: originalFinancialBase,
+      baseTotal: originalBaseTotal,
+      baseAdditional: originalBaseAdditional,
+      taxMain: originalTaxMain,
+      taxAdditional: originalTaxAdditional,
+      grossTax: originalGrossTax,
+      netTax: originalNetTax,
+      withheldIr: input.withheldIr,
+      availableLimit: original.availableLimit,
+      carryLimitForward: original.carryLimitForward,
+    },
+    final: {
+      excess: final.finalExcess,
+      baseRegular: finalBaseRegular,
+      baseExcess: finalBaseExcess,
+      financialBase: finalFinancialBase,
+      baseTotal: finalBaseTotal,
+      baseAdditional: finalBaseAdditional,
+      taxMain: finalTaxMain,
+      taxAdditional: finalTaxAdditional,
+      grossTax: finalGrossTax,
+      netTax: finalNetTax,
+      adjustmentType: final.adjustmentType,
+    },
+    credit,
+  };
+}
+
+function buildCsllQuarterResult(input, original, final) {
+  const originalBaseRegular = (original.active ? original.withinLimit : input.operationalRevenue) * CONSTANTS.presumptiveCsll;
+  const originalBaseExcess = original.excess * CONSTANTS.presumptiveCsllExcess;
+  const originalFinancialBase = input.financialRevenue;
+  const originalBaseTotal = originalBaseRegular + originalBaseExcess + originalFinancialBase;
+  const originalGrossTax = originalBaseTotal * CONSTANTS.csllRate;
+
+  const activeFinal = original.active;
+  const finalRegularOperational = activeFinal ? input.operationalRevenue - final.finalExcess : input.operationalRevenue;
+  const finalBaseRegular = finalRegularOperational * CONSTANTS.presumptiveCsll;
+  const finalBaseExcess = final.finalExcess * CONSTANTS.presumptiveCsllExcess;
+  const finalFinancialBase = input.financialRevenue;
+  const finalBaseTotal = finalBaseRegular + finalBaseExcess + finalFinancialBase;
+  const finalGrossTax = finalBaseTotal * CONSTANTS.csllRate;
+  const credit = Math.max(originalGrossTax - finalGrossTax, 0);
+
+  return {
+    original: {
+      withinLimit: original.withinLimit,
+      excess: original.excess,
+      baseRegular: originalBaseRegular,
+      baseExcess: originalBaseExcess,
+      financialBase: originalFinancialBase,
+      baseTotal: originalBaseTotal,
+      grossTax: originalGrossTax,
+      availableLimit: original.availableLimit,
+      carryLimitForward: original.carryLimitForward,
+      active: original.active,
+    },
+    final: {
+      excess: final.finalExcess,
+      baseRegular: finalBaseRegular,
+      baseExcess: finalBaseExcess,
+      financialBase: finalFinancialBase,
+      baseTotal: finalBaseTotal,
+      grossTax: finalGrossTax,
+      adjustmentType: final.adjustmentType,
+      active: original.active,
+    },
+    credit,
+  };
+}
+
+function buildPisCofinsQuarterResult(input) {
+  const pis = input.pisCofinsBase * CONSTANTS.pisRate;
+  const cofins = input.pisCofinsBase * CONSTANTS.cofinsRate;
+  return {
+    base: input.pisCofinsBase,
+    pis,
+    cofins,
+    total: pis + cofins,
+  };
+}
+
+function buildAnnualSummary(quarterResults) {
+  const totals = quarterResults.reduce(
+    (acc, quarter) => {
+      acc.grossRevenue += quarter.grossRevenue;
+      acc.returns += quarter.returns;
+      acc.operationalRevenue += quarter.operationalRevenue;
+      acc.financialRevenue += quarter.financialRevenue;
+      acc.withheldIr += quarter.withheldIr;
+      acc.icmsAmount += quarter.icmsAmount;
+      acc.monophaseRevenue += quarter.monophaseRevenue;
+      acc.pisCofinsBase += quarter.pisCofinsBase;
+      acc.irpjOriginal += quarter.irpj.original.grossTax;
+      acc.irpjFinal += quarter.irpj.final.grossTax;
+      acc.irpjCredit += quarter.irpj.credit;
+      acc.csllOriginal += quarter.csll.original.grossTax;
+      acc.csllFinal += quarter.csll.final.grossTax;
+      acc.csllCredit += quarter.csll.credit;
+      acc.pis += quarter.pisCofins.pis;
+      acc.cofins += quarter.pisCofins.cofins;
+      return acc;
+    },
+    {
+      grossRevenue: 0,
+      returns: 0,
+      operationalRevenue: 0,
+      financialRevenue: 0,
+      withheldIr: 0,
+      icmsAmount: 0,
+      monophaseRevenue: 0,
+      pisCofinsBase: 0,
+      irpjOriginal: 0,
+      irpjFinal: 0,
+      irpjCredit: 0,
+      csllOriginal: 0,
+      csllFinal: 0,
+      csllCredit: 0,
+      pis: 0,
+      cofins: 0,
+    }
+  );
+
+  totals.irpjNetFourthQuarter = Math.max(quarterResults[3].irpj.original.netTax - totals.irpjCredit, 0);
+  totals.irpjNegativeBalance = Math.max(totals.irpjCredit - quarterResults[3].irpj.original.netTax, 0);
+  totals.csllNetFourthQuarter = Math.max(quarterResults[3].csll.original.grossTax - totals.csllCredit, 0);
+  totals.csllNegativeBalance = Math.max(totals.csllCredit - quarterResults[3].csll.original.grossTax, 0);
+  totals.totalFederalBurden = totals.irpjFinal + totals.csllFinal + totals.pis + totals.cofins;
+  return totals;
+}
+
+function renderAnnualSummary(calculation) {
+  const annualSummary = document.getElementById("annualSummary");
+  const cards = [
+    ["Receita bruta anual", calculation.annual.grossRevenue],
+    ["Receita operacional líquida", calculation.annual.operationalRevenue],
+    ["Receita financeira anual", calculation.annual.financialRevenue],
+    ["Base anual PIS/COFINS", calculation.annual.pisCofinsBase],
+    ["IRPJ bruto reapurado", calculation.annual.irpjFinal],
+    ["CSLL reapurada", calculation.annual.csllFinal],
+    ["Crédito de recálculo IRPJ", calculation.annual.irpjCredit],
+    ["Crédito de recálculo CSLL", calculation.annual.csllCredit],
+    ["PIS + COFINS", calculation.annual.pis + calculation.annual.cofins],
+    ["Carga federal total estimada", calculation.annual.totalFederalBurden],
+  ];
+
+  annualSummary.innerHTML = cards
+    .map(
+      ([label, value]) => `
+        <article class="summary-card">
+          <h3>${label}</h3>
+          <div class="value">${formatCurrency(value)}</div>
+        </article>
+      `
+    )
+    .join("");
+}
+
+function renderAnnualDiagnostics(calculation) {
+  const annual = calculation.annual;
+  const container = document.getElementById("annualDiagnostics");
+  const irpjAboveLimit = annual.operationalRevenue > CONSTANTS.annualLimitIrpj;
+  const csllEligibleRevenue = calculation.csllOriginal.reduce((total, item) => total + (item.active ? item.operationalRevenue : 0), 0);
+  const csllAboveLimit = csllEligibleRevenue > CONSTANTS.annualLimitCsll2026;
+
+  const diagnostics = [
+    {
+      title: "Limite anual do IRPJ",
+      text: `${formatCurrency(CONSTANTS.annualLimitIrpj)}. Receita sujeita ao limite em 2026: ${formatCurrency(annual.operationalRevenue)}. ${irpjAboveLimit ? "Há excesso anual de IRPJ." : "Não houve excesso anual de IRPJ."}`,
+    },
+    {
+      title: "Limite anual da CSLL em 2026",
+      text: `${formatCurrency(CONSTANTS.annualLimitCsll2026)}. Receita sujeita ao limite da CSLL (a partir do 2º tri): ${formatCurrency(csllEligibleRevenue)}. ${csllAboveLimit ? "Há excesso anual de CSLL." : "Não houve excesso anual de CSLL."}`,
+    },
+    {
+      title: "Receita financeira",
+      text: `Total anual informado: ${formatCurrency(annual.financialRevenue)}. Ela entra integralmente na base de IRPJ/CSLL, mas não entra no limite de R$ 5 milhões nem na base de PIS/COFINS.`,
+    },
+    {
+      title: "Regime adotado no dashboard",
+      text: `Regime selecionado: ${state.recognitionRegime === "caixa" ? "Caixa" : "Competência"}. O app usa esse campo como orientação operacional para lembrar se os valores mensais lançados devem representar receita recebida ou auferida.`,
+    },
+    {
+      title: "IRRF mensal acumulado",
+      text: `IRRF total informado no ano: ${formatCurrency(annual.withheldIr)}. O app trata esse valor como antecipação/compensação do IRPJ, sem aplicar a redução da LC 224/2025 sobre o IRRF.`,
+    },
+    {
+      title: "Base de PIS/COFINS",
+      text: `Base anual apurada: ${formatCurrency(annual.pisCofinsBase)}. O cálculo exclui devoluções, ICMS informado e receitas monofásicas; receitas financeiras permanecem fora dessa base cumulativa.`,
+    },
+    {
+      title: "Fechamento do 4º trimestre",
+      text: `IRPJ líquido após crédito: ${formatCurrency(annual.irpjNetFourthQuarter)}; saldo negativo remanescente de IRPJ: ${formatCurrency(annual.irpjNegativeBalance)}. CSLL líquida após crédito: ${formatCurrency(annual.csllNetFourthQuarter)}.`,
+    },
+  ];
+
+  container.innerHTML = `<div class="diagnostic-grid">${diagnostics
+    .map(
+      (item) => `
+        <article class="diagnostic-card">
+          <h3>${item.title}</h3>
+          <p>${item.text}</p>
+        </article>
+      `
+    )
+    .join("")}</div>`;
+}
+
+function renderQuarterResults(calculation) {
+  calculation.quarterResults.forEach((quarter, index) => {
+    const panel = document.getElementById(QUARTERS[index].id);
+    const badges = panel.querySelector(".quarter-badges");
+    const rules = panel.querySelector(".quarter-rules");
+    const ledger = panel.querySelector(".quarter-ledger");
+    const diagnostics = panel.querySelector(".quarter-diagnostics");
+    const originalIrpj = calculation.irpjOriginal[index];
+    const originalCsll = calculation.csllOriginal[index];
+    badges.innerHTML = `
+      <span class="badge">Limite IRPJ no tri: ${formatCurrency(originalIrpj.availableLimit || 0)}</span>
+      <span class="badge ${quarter.irpj.original.excess > 0 ? "warn" : "success"}">Excedente IRPJ: ${formatCurrency(quarter.irpj.original.excess)}</span>
+      <span class="badge ${quarter.csll.original.excess > 0 ? "warn" : "success"}">Excedente CSLL: ${formatCurrency(quarter.csll.original.excess)}</span>
+      <span class="badge">IRRF trimestral: ${formatCurrency(quarter.withheldIr)}</span>
+    `;
+
+    rules.innerHTML = `
+      ${ruleCard("Alíquotas do trimestre", `
+        IRPJ: presunção de ${formatPercent(CONSTANTS.presumptiveIrpj)} e ${formatPercent(CONSTANTS.presumptiveIrpjExcess)} no excedente.<br>
+        CSLL: presunção de ${formatPercent(CONSTANTS.presumptiveCsll)} e ${formatPercent(CONSTANTS.presumptiveCsllExcess)} no excedente elegível.
+      `)}
+      ${ruleCard("Receita que entra no limite", `
+        Receita sujeita ao limite no trimestre: ${formatCurrency(quarter.operationalRevenue)}.<br>
+        Receita financeira no trimestre: ${formatCurrency(quarter.financialRevenue)} (fora do limite, mas dentro da base de IRPJ/CSLL).
+      `)}
+      ${ruleCard("Limite proporcional e sobra", `
+        Limite disponível para IRPJ neste trimestre: ${formatCurrency(quarter.irpj.original.availableLimit)}.<br>
+        Sobra transportada para o trimestre seguinte: ${formatCurrency(quarter.irpj.original.carryLimitForward)}.
+      `)}
+      ${ruleCard("PIS/COFINS do trimestre", `
+        Base cumulativa: ${formatCurrency(quarter.pisCofins.base)}.<br>
+        PIS ${formatPercent(CONSTANTS.pisRate)} / COFINS ${formatPercent(CONSTANTS.cofinsRate)} sobre faturamento ajustado.
+      `)}
+    `;
+
+    ledger.innerHTML = `
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Mês</th>
+              <th>Faturamento bruto</th>
+              <th>Deduções operacionais</th>
+              <th>Receita sujeita ao limite</th>
+              <th>Receita financeira</th>
+              <th>IRRF</th>
+              <th>ICMS</th>
+              <th>Monofásicos</th>
+              <th>Base PIS/COFINS</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${quarter.months
+              .map(
+                (month) => `
+                  <tr>
+                    <td>${month.name}</td>
+                    <td>${formatCurrency(month.grossRevenue)}</td>
+                    <td>${formatCurrency(month.returns)}</td>
+                    <td>${formatCurrency(month.operationalNetRevenue)}</td>
+                    <td>${formatCurrency(month.financialRevenue)}</td>
+                    <td>${formatCurrency(month.withheldIrMonth)}</td>
+                    <td>${formatCurrency(month.icmsAmount)}</td>
+                    <td>${formatCurrency(month.monophaseRevenue)}</td>
+                    <td>${formatCurrency(month.pisCofinsBase)}</td>
+                  </tr>
+                `
+              )
+              .join("")}
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    const quarterResults = panel.querySelector(".quarter-results");
+    quarterResults.innerHTML = `
+      ${miniCard("Receita operacional líquida", formatCurrency(quarter.operationalRevenue), `Faturamento líquido do trimestre: ${formatCurrency(quarter.operationalRevenue)}.`)}
+      ${miniCard("Receitas financeiras", formatCurrency(quarter.financialRevenue), `Somadas integralmente à base do IRPJ e da CSLL.`)}
+      ${miniCard("Base PIS/COFINS", formatCurrency(quarter.pisCofins.base), `Após excluir ICMS informado e monofásicos.`)}
+      ${miniCard("IRPJ original / reapurado", `${formatCurrency(quarter.irpj.original.grossTax)} / ${formatCurrency(quarter.irpj.final.grossTax)}`, `Crédito do recálculo: ${formatCurrency(quarter.irpj.credit)}.`)}
+      ${miniCard("CSLL original / reapurada", `${formatCurrency(quarter.csll.original.grossTax)} / ${formatCurrency(quarter.csll.final.grossTax)}`, `Crédito do recálculo: ${formatCurrency(quarter.csll.credit)}.`)}
+      ${miniCard("PIS / COFINS", `${formatCurrency(quarter.pisCofins.pis)} / ${formatCurrency(quarter.pisCofins.cofins)}`, `Total das contribuições do trimestre: ${formatCurrency(quarter.pisCofins.total)}.`)}
+    `;
+
+    diagnostics.innerHTML = `
+      <div class="diagnostic-grid">
+        <article class="diagnostic-card">
+          <h3>Leitura técnica do trimestre</h3>
+          <ul class="bullet-list">
+            <li>${quarter.irpj.original.excess > 0 ? `Houve excedente provisório de IRPJ de ${formatCurrency(quarter.irpj.original.excess)}.` : "Não houve excedente provisório de IRPJ no trimestre."}</li>
+            <li>${quarter.csll.original.active ? `A CSLL já está ativa para o acréscimo neste trimestre; excedente provisório apurado: ${formatCurrency(quarter.csll.original.excess)}.` : "A CSLL ainda não sofre acréscimo neste trimestre de 2026."}</li>
+            <li>${quarter.irpj.credit > 0 || quarter.csll.credit > 0 ? `O recálculo anual gerou crédito de ${formatCurrency(quarter.irpj.credit)} em IRPJ e ${formatCurrency(quarter.csll.credit)} em CSLL.` : "Até o momento, este trimestre não gerou crédito adicional no recálculo anual."}</li>
+            <li>Receitas financeiras foram mantidas fora do limite e dentro da base integral de IRPJ/CSLL, conforme o Q&A da Receita.</li>
+          </ul>
+        </article>
+      </div>
+    `;
+  });
+}
+
+function miniCard(title, value, note) {
+  return `
+    <article class="mini-card">
+      <h4>${title}</h4>
+      <div class="value">${value}</div>
+      <p class="table-note">${note}</p>
+    </article>
+  `;
+}
+
+function ruleCard(title, text) {
+  return `
+    <article class="rule-card">
+      <h3>${title}</h3>
+      <p>${text}</p>
+    </article>
+  `;
+}
+
+function renderRecalcTables(calculation) {
+  const container = document.getElementById("recalcTables");
+  const irpjRows = calculation.quarterResults
+    .map(
+      (quarter) => `
+        <tr>
+          <td>${quarter.quarterLabel}</td>
+          <td>${formatCurrency(quarter.irpj.original.grossTax)}</td>
+          <td>${formatCurrency(quarter.irpj.final.grossTax)}</td>
+          <td>${formatCurrency(quarter.irpj.credit)}</td>
+          <td>${formatCurrency(quarter.irpj.original.netTax)}</td>
+        </tr>
+      `
+    )
+    .join("");
+
+  const csllRows = calculation.quarterResults
+    .map(
+      (quarter) => `
+        <tr>
+          <td>${quarter.quarterLabel}</td>
+          <td>${formatCurrency(quarter.csll.original.grossTax)}</td>
+          <td>${formatCurrency(quarter.csll.final.grossTax)}</td>
+          <td>${formatCurrency(quarter.csll.credit)}</td>
+          <td>${quarter.csll.original.active ? "Ativo" : "Sem acréscimo em 2026"}</td>
+        </tr>
+      `
+    )
+    .join("");
+
+  container.innerHTML = `
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>IRPJ</th>
+            <th>Apuração original</th>
+            <th>Apuração reprocessada</th>
+            <th>Crédito</th>
+            <th>IRPJ líquido após IRRF</th>
+          </tr>
+        </thead>
+        <tbody>${irpjRows}</tbody>
+      </table>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>CSLL</th>
+            <th>Apuração original</th>
+            <th>Apuração reprocessada</th>
+            <th>Crédito</th>
+            <th>Status 2026</th>
+          </tr>
+        </thead>
+        <tbody>${csllRows}</tbody>
+      </table>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Fechamento do 4º trimestre</th>
+            <th>DARF original</th>
+            <th>Crédito do recálculo</th>
+            <th>Valor líquido a recolher</th>
+            <th>Saldo negativo remanescente</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>IRPJ</td>
+            <td>${formatCurrency(calculation.quarterResults[3].irpj.original.netTax)}</td>
+            <td>${formatCurrency(calculation.annual.irpjCredit)}</td>
+            <td>${formatCurrency(calculation.annual.irpjNetFourthQuarter)}</td>
+            <td class="${calculation.annual.irpjNegativeBalance > 0 ? "highlight-positive" : ""}">${formatCurrency(calculation.annual.irpjNegativeBalance)}</td>
+          </tr>
+          <tr>
+            <td>CSLL</td>
+            <td>${formatCurrency(calculation.quarterResults[3].csll.original.grossTax)}</td>
+            <td>${formatCurrency(calculation.annual.csllCredit)}</td>
+            <td>${formatCurrency(calculation.annual.csllNetFourthQuarter)}</td>
+            <td class="${calculation.annual.csllNegativeBalance > 0 ? "highlight-positive" : ""}">${formatCurrency(calculation.annual.csllNegativeBalance)}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderDetailedOutput(calculation) {
+  const container = document.getElementById("detailedOutput");
+  const revenueRows = calculation.quarterResults
+    .map(
+      (quarter) => `
+        <tr>
+          <td>${quarter.quarterLabel}</td>
+          <td>${formatCurrency(quarter.grossRevenue)}</td>
+          <td>${formatCurrency(quarter.returns)}</td>
+          <td>${formatCurrency(quarter.operationalRevenue)}</td>
+          <td>${formatCurrency(quarter.financialRevenue)}</td>
+          <td>${formatCurrency(quarter.withheldIr)}</td>
+          <td>${formatCurrency(quarter.icmsAmount)}</td>
+          <td>${formatCurrency(quarter.monophaseRevenue)}</td>
+          <td>${formatCurrency(quarter.pisCofinsBase)}</td>
+        </tr>
+      `
+    )
+    .join("");
+
+  const irpjRows = calculation.quarterResults
+    .map(
+      (quarter) => `
+        <tr>
+          <td>${quarter.quarterLabel}</td>
+          <td>${formatCurrency(quarter.irpj.original.availableLimit)}</td>
+          <td>${formatCurrency(quarter.irpj.original.withinLimit)}</td>
+          <td>${formatCurrency(quarter.irpj.original.excess)}</td>
+          <td>${formatCurrency(quarter.irpj.final.excess)}</td>
+          <td>${formatCurrency(quarter.irpj.final.baseRegular)}</td>
+          <td>${formatCurrency(quarter.irpj.final.baseExcess)}</td>
+          <td>${formatCurrency(quarter.irpj.final.financialBase)}</td>
+          <td>${formatCurrency(quarter.irpj.final.baseTotal)}</td>
+          <td>${formatCurrency(quarter.irpj.final.taxMain)}</td>
+          <td>${formatCurrency(quarter.irpj.final.taxAdditional)}</td>
+          <td>${formatCurrency(quarter.irpj.final.grossTax)}</td>
+        </tr>
+      `
+    )
+    .join("");
+
+  const csllRows = calculation.quarterResults
+    .map(
+      (quarter) => `
+        <tr>
+          <td>${quarter.quarterLabel}</td>
+          <td>${formatCurrency(quarter.csll.original.availableLimit)}</td>
+          <td>${formatCurrency(quarter.csll.original.withinLimit)}</td>
+          <td>${formatCurrency(quarter.csll.original.excess)}</td>
+          <td>${formatCurrency(quarter.csll.final.excess)}</td>
+          <td>${formatCurrency(quarter.csll.final.baseRegular)}</td>
+          <td>${formatCurrency(quarter.csll.final.baseExcess)}</td>
+          <td>${formatCurrency(quarter.csll.final.financialBase)}</td>
+          <td>${formatCurrency(quarter.csll.final.baseTotal)}</td>
+          <td>${formatCurrency(quarter.csll.final.grossTax)}</td>
+          <td>${quarter.csll.final.adjustmentType}</td>
+        </tr>
+      `
+    )
+    .join("");
+
+  const pisRows = calculation.quarterResults
+    .map(
+      (quarter) => `
+        <tr>
+          <td>${quarter.quarterLabel}</td>
+          <td>${formatCurrency(quarter.grossRevenue)}</td>
+          <td>${formatCurrency(quarter.returns)}</td>
+          <td>${formatCurrency(quarter.icmsAmount)}</td>
+          <td>${formatCurrency(quarter.monophaseRevenue)}</td>
+          <td>${formatCurrency(quarter.pisCofins.base)}</td>
+          <td>${formatCurrency(quarter.pisCofins.pis)}</td>
+          <td>${formatCurrency(quarter.pisCofins.cofins)}</td>
+          <td>${formatCurrency(quarter.pisCofins.total)}</td>
+        </tr>
+      `
+    )
+    .join("");
+
+  container.innerHTML = `
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Receitas por trimestre</th>
+            <th>Faturamento bruto</th>
+            <th>Deduções operacionais</th>
+            <th>Receita operacional líquida</th>
+            <th>Receita financeira</th>
+            <th>IRRF mensal acumulado</th>
+            <th>ICMS informado</th>
+            <th>Monofásicos</th>
+            <th>Base PIS/COFINS</th>
+          </tr>
+        </thead>
+        <tbody>${revenueRows}</tbody>
+      </table>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>IRPJ</th>
+            <th>Limite utilizado</th>
+            <th>Parcela regular</th>
+            <th>Excesso original</th>
+            <th>Excesso final</th>
+            <th>Base 8%</th>
+            <th>Base 8,8%</th>
+            <th>Receita financeira</th>
+            <th>Base total</th>
+            <th>IRPJ 15%</th>
+            <th>Adicional 10%</th>
+            <th>IRPJ bruto</th>
+          </tr>
+        </thead>
+        <tbody>${irpjRows}</tbody>
+      </table>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>CSLL</th>
+            <th>Limite utilizado</th>
+            <th>Parcela regular</th>
+            <th>Excesso original</th>
+            <th>Excesso final</th>
+            <th>Base 12%</th>
+            <th>Base 13,2%</th>
+            <th>Receita financeira</th>
+            <th>Base total</th>
+            <th>CSLL 9%</th>
+            <th>Status do recálculo</th>
+          </tr>
+        </thead>
+        <tbody>${csllRows}</tbody>
+      </table>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>PIS/COFINS cumulativos</th>
+            <th>Receita bruta</th>
+            <th>Devoluções excluídas</th>
+            <th>ICMS excluído</th>
+            <th>Monofásicos excluídos</th>
+            <th>Base final</th>
+            <th>PIS 0,65%</th>
+            <th>COFINS 3%</th>
+            <th>Total</th>
+          </tr>
+        </thead>
+        <tbody>${pisRows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function buildExportPayload(calculation) {
+  return {
+    metadata: {
+      aplicativo: "Dashboard Lucro Presumido 2026 - Comércio",
+      regime: "Lucro Presumido",
+      segmento: "Comércio",
+      reconhecimentoReceita: state.recognitionRegime,
+      dataExportacao: new Date().toISOString(),
+      referenciasPerguntasRespostas: LEGAL_REFERENCES,
+      observacoes: [
+        "IRPJ com presunção de 8% e 8,8% no excedente trimestral/anual.",
+        "CSLL com presunção de 12% e 13,2% a partir do 2º trimestre de 2026.",
+        "Receitas financeiras entram integralmente na base de IRPJ/CSLL.",
+        "Receitas financeiras não entram no limite anual/proporcional do acréscimo dos percentuais.",
+        "IRRF não sofre a redução da LC 224/2025 e é tratado apenas como compensação do IRPJ.",
+        "PIS/COFINS cumulativos usam base operacional com exclusão de ICMS informado e monofásicos.",
+      ],
+    },
+    annual: calculation.annual,
+    quarters: calculation.quarterResults,
+  };
+}
+
+function exportXml() {
+  const calculation = calculateAll();
+  const payload = buildExportPayload(calculation);
+  const xml = toXml(payload);
+  downloadFile(`lucro-presumido-comercio-2026-${timestampForFile()}.xml`, xml, "application/xml;charset=utf-8");
+}
+
+function toXml(payload) {
+  const quartersXml = payload.quarters
+    .map(
+      (quarter) => `
+    <trimestre id="${escapeXml(quarter.quarterLabel)}">
+      <receitaBruta>${quarter.grossRevenue.toFixed(2)}</receitaBruta>
+      <deducoesOperacionais>${quarter.returns.toFixed(2)}</deducoesOperacionais>
+      <receitaOperacional>${quarter.operationalRevenue.toFixed(2)}</receitaOperacional>
+      <receitaFinanceira>${quarter.financialRevenue.toFixed(2)}</receitaFinanceira>
+      <irrfMensalAcumulado>${quarter.withheldIr.toFixed(2)}</irrfMensalAcumulado>
+      <icmsInformado>${quarter.icmsAmount.toFixed(2)}</icmsInformado>
+      <receitaMonofasica>${quarter.monophaseRevenue.toFixed(2)}</receitaMonofasica>
+      <basePisCofins>${quarter.pisCofins.base.toFixed(2)}</basePisCofins>
+      <irpj>
+        <excessoOriginal>${quarter.irpj.original.excess.toFixed(2)}</excessoOriginal>
+        <excessoFinal>${quarter.irpj.final.excess.toFixed(2)}</excessoFinal>
+        <baseTotal>${quarter.irpj.final.baseTotal.toFixed(2)}</baseTotal>
+        <tributo>${quarter.irpj.final.grossTax.toFixed(2)}</tributo>
+        <credito>${quarter.irpj.credit.toFixed(2)}</credito>
+      </irpj>
+      <csll>
+        <excessoOriginal>${quarter.csll.original.excess.toFixed(2)}</excessoOriginal>
+        <excessoFinal>${quarter.csll.final.excess.toFixed(2)}</excessoFinal>
+        <baseTotal>${quarter.csll.final.baseTotal.toFixed(2)}</baseTotal>
+        <tributo>${quarter.csll.final.grossTax.toFixed(2)}</tributo>
+        <credito>${quarter.csll.credit.toFixed(2)}</credito>
+      </csll>
+      <pisCofins>
+        <pis>${quarter.pisCofins.pis.toFixed(2)}</pis>
+        <cofins>${quarter.pisCofins.cofins.toFixed(2)}</cofins>
+        <total>${quarter.pisCofins.total.toFixed(2)}</total>
+      </pisCofins>
+      <meses>
+        ${quarter.months
+          .map(
+            (month) => `
+        <mes nome="${escapeXml(month.name)}">
+          <faturamentoBruto>${month.grossRevenue.toFixed(2)}</faturamentoBruto>
+          <devolucoes>${month.returns.toFixed(2)}</devolucoes>
+          <receitaFinanceira>${month.financialRevenue.toFixed(2)}</receitaFinanceira>
+          <irrf>${month.withheldIrMonth.toFixed(2)}</irrf>
+          <icms>${month.icmsAmount.toFixed(2)}</icms>
+          <receitaMonofasica>${month.monophaseRevenue.toFixed(2)}</receitaMonofasica>
+        </mes>`
+          )
+          .join("")}
+      </meses>
+    </trimestre>`
+    )
+    .join("");
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<lucroPresumidoComercio2026>
+  <metadata>
+    <aplicativo>${escapeXml(payload.metadata.aplicativo)}</aplicativo>
+    <regime>${escapeXml(payload.metadata.regime)}</regime>
+    <segmento>${escapeXml(payload.metadata.segmento)}</segmento>
+    <reconhecimentoReceita>${escapeXml(payload.metadata.reconhecimentoReceita)}</reconhecimentoReceita>
+    <dataExportacao>${payload.metadata.dataExportacao}</dataExportacao>
+    <observacoes>${payload.metadata.observacoes.map((item) => `<item>${escapeXml(item)}</item>`).join("")}</observacoes>
+    <perguntasRespostas>${payload.metadata.referenciasPerguntasRespostas
+      .map((item) => `<referencia><titulo>${escapeXml(item.title)}</titulo><texto>${escapeXml(item.text)}</texto></referencia>`)
+      .join("")}</perguntasRespostas>
+  </metadata>
+  <anual>
+    <receitaBruta>${payload.annual.grossRevenue.toFixed(2)}</receitaBruta>
+    <receitaOperacional>${payload.annual.operationalRevenue.toFixed(2)}</receitaOperacional>
+    <receitaFinanceira>${payload.annual.financialRevenue.toFixed(2)}</receitaFinanceira>
+    <irpjFinal>${payload.annual.irpjFinal.toFixed(2)}</irpjFinal>
+    <csllFinal>${payload.annual.csllFinal.toFixed(2)}</csllFinal>
+    <pis>${payload.annual.pis.toFixed(2)}</pis>
+    <cofins>${payload.annual.cofins.toFixed(2)}</cofins>
+    <creditoIrpj>${payload.annual.irpjCredit.toFixed(2)}</creditoIrpj>
+    <creditoCsll>${payload.annual.csllCredit.toFixed(2)}</creditoCsll>
+  </anual>
+  <trimestres>${quartersXml}
+  </trimestres>
+</lucroPresumidoComercio2026>`;
+}
+
+function exportPdf() {
+  const calculation = calculateAll();
+  const printWindow = window.open("", "_blank", "width=1200,height=900");
+  if (!printWindow) {
+    alert("Seu navegador bloqueou a janela de impressão. Libere pop-ups e tente novamente.");
+    return;
+  }
+
+  printWindow.document.write(`
+    <html lang="pt-BR">
+      <head>
+        <meta charset="UTF-8" />
+        <title>Relatório Lucro Presumido 2026</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 24px; color: #142033; }
+          h1, h2 { margin-bottom: 8px; }
+          .note { color: #5a6678; margin-bottom: 20px; }
+          table { width: 100%; border-collapse: collapse; margin-bottom: 24px; font-size: 12px; }
+          th, td { border: 1px solid #dbe4ef; padding: 8px; text-align: right; }
+          th:first-child, td:first-child { text-align: left; }
+          th { background: #f7faff; }
+          .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 20px; }
+          .card { border: 1px solid #dbe4ef; border-radius: 12px; padding: 14px; }
+          .card strong { display: block; margin-bottom: 8px; }
+        </style>
+      </head>
+      <body>
+        <h1>Relatório de Lucro Presumido 2026 - Comércio</h1>
+        <p class="note">Relatório preparado para exportação em PDF via impressão do navegador.</p>
+        <div class="grid">
+          <div class="card"><strong>Receita bruta anual</strong>${formatCurrency(calculation.annual.grossRevenue)}</div>
+          <div class="card"><strong>IRPJ reapurado</strong>${formatCurrency(calculation.annual.irpjFinal)}</div>
+          <div class="card"><strong>CSLL reapurada</strong>${formatCurrency(calculation.annual.csllFinal)}</div>
+          <div class="card"><strong>PIS</strong>${formatCurrency(calculation.annual.pis)}</div>
+          <div class="card"><strong>COFINS</strong>${formatCurrency(calculation.annual.cofins)}</div>
+          <div class="card"><strong>Crédito IRPJ + CSLL</strong>${formatCurrency(calculation.annual.irpjCredit + calculation.annual.csllCredit)}</div>
+        </div>
+        ${document.getElementById("annualDiagnostics").innerHTML}
+        ${document.getElementById("recalcTables").innerHTML}
+        ${document.getElementById("detailedOutput").innerHTML}
+      </body>
+    </html>
+  `);
+  printWindow.document.close();
+  printWindow.focus();
+  printWindow.print();
+}
+
+function downloadFile(filename, content, mimeType) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function escapeXml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function timestampForFile() {
+  const now = new Date();
+  return [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+    String(now.getHours()).padStart(2, "0"),
+    String(now.getMinutes()).padStart(2, "0"),
+  ].join("");
+}
+
+document.getElementById("recognitionRegime").addEventListener("change", (event) => {
+  state.recognitionRegime = event.target.value;
+  saveState();
+  renderApp();
+});
+document.getElementById("recalculateBtn").addEventListener("click", () => renderApp());
+document.getElementById("exportXmlBtn").addEventListener("click", exportXml);
+document.getElementById("exportPdfBtn").addEventListener("click", exportPdf);
+document.getElementById("resetBtn").addEventListener("click", () => {
+  if (!window.confirm("Deseja limpar todos os dados informados?")) return;
+  const currentRegime = state.recognitionRegime;
+  state = createDefaultState();
+  state.recognitionRegime = currentRegime;
+  saveState();
+  renderApp();
+});
+
+renderApp();

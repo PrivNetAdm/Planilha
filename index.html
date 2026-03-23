@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dashboard Lucro Presumido 2026 - Comércio</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">LC 224/2025 + IN RFB 2.305/2025 + Perguntas e Respostas RFB</p>
+          <h1>Dashboard de Lucro Presumido 2026 - Comércio</h1>
+          <p class="subtitle">
+            Controle trimestral e mensal de IRPJ, CSLL, PIS e COFINS com regra de sobra de limite,
+            recálculo anual, receitas financeiras, IRRF mensal e exclusão de ICMS/monofásicos da base
+            de PIS/COFINS.
+          </p>
+        </div>
+        <div class="hero-actions">
+          <label class="control-stack" for="recognitionRegime">
+            <span>Regime de reconhecimento da receita</span>
+            <select id="recognitionRegime">
+              <option value="competencia">Competência</option>
+              <option value="caixa">Caixa</option>
+            </select>
+          </label>
+          <button id="recalculateBtn" class="primary">Calcular tudo</button>
+          <button id="exportXmlBtn">Gerar XML</button>
+          <button id="exportPdfBtn">Gerar PDF</button>
+          <button id="resetBtn" class="danger ghost">Limpar dados</button>
+        </div>
+      </header>
+
+      <section class="legal-card">
+        <div class="section-title-row">
+          <h2>Cenários prontos da palestra</h2>
+          <span class="muted">Atalhos para carregar rapidamente os exemplos de conferência apresentados no material.</span>
+        </div>
+        <div class="scenario-actions" id="scenarioActions"></div>
+      </section>
+
+      <section class="legal-card">
+        <h2>Regras consideradas nesta versão</h2>
+        <ul>
+          <li><strong>Atividade única:</strong> comércio.</li>
+          <li><strong>IRPJ:</strong> presunção de 8% até o limite e 8,8% no excedente; alíquota de 15% + adicional de 10% sobre a base trimestral que exceder R$ 60.000,00.</li>
+          <li><strong>CSLL:</strong> presunção de 12% até o limite e 13,2% no excedente; em 2026 o acréscimo só começa no 2º trimestre.</li>
+          <li><strong>Receita financeira:</strong> entra integralmente na base de IRPJ/CSLL e fica fora da base de PIS/COFINS cumulativos.</li>
+          <li><strong>Limite de R$ 5 milhões:</strong> considera apenas receitas sujeitas aos coeficientes de presunção; receitas financeiras e ganhos computados integralmente não entram nesse limite.</li>
+          <li><strong>PIS/COFINS cumulativos:</strong> calculados só sobre faturamento operacional ajustado, com exclusão de ICMS destacado e receita monofásica informada.</li>
+          <li><strong>IRRF:</strong> não sofre a redução da LC 224/2025; aqui ele é tratado como antecipação/compensação no IRPJ trimestral.</li>
+          <li><strong>Recálculo anual:</strong> redistribui ou zera o excedente trimestral quando o total do ano não sustenta o excesso apurado ao longo dos trimestres.</li>
+        </ul>
+      </section>
+
+      <section class="legal-card">
+        <h2>Destaques do Perguntas e Respostas da Receita usados no app</h2>
+        <div class="reference-grid" id="referenceGrid"></div>
+      </section>
+
+      <section class="summary-grid" id="annualSummary"></section>
+
+      <section class="report-card">
+        <div class="section-title-row">
+          <h2>Diagnóstico anual</h2>
+          <span class="muted">Leitura rápida dos limites, exceções e efeitos do recálculo de final de ano.</span>
+        </div>
+        <div id="annualDiagnostics"></div>
+      </section>
+
+      <section class="tabs-card">
+        <div class="quarter-tabs" id="quarterTabs"></div>
+        <div id="quarterPanels"></div>
+      </section>
+
+      <section class="report-card">
+        <div class="section-title-row">
+          <h2>Recálculo anual e fechamento do exercício</h2>
+          <span class="muted">Créditos do recálculo são demonstrados para aproveitamento no 4º trimestre.</span>
+        </div>
+        <div id="recalcTables"></div>
+      </section>
+
+      <section class="report-card">
+        <div class="section-title-row">
+          <h2>Resumo técnico e memória de cálculo</h2>
+          <span class="muted">Quadros prontos para auditoria interna e conferência do escritório.</span>
+        </div>
+        <div id="detailedOutput"></div>
+      </section>
+
+      <section class="report-card">
+        <div class="section-title-row">
+          <h2>Aspectos contábeis e observações operacionais</h2>
+          <span class="muted">Resumo dos lançamentos e alertas operacionais extraídos do material enviado.</span>
+        </div>
+        <div id="accountingNotes"></div>
+      </section>
+    </div>
+
+    <template id="quarterPanelTemplate">
+      <section class="quarter-panel hidden">
+        <div class="quarter-head">
+          <div>
+            <h2 class="quarter-title"></h2>
+            <p class="muted quarter-subtitle"></p>
+          </div>
+          <div class="quarter-badges"></div>
+        </div>
+        <div class="quarter-rules"></div>
+        <div class="month-tabs"></div>
+        <div class="month-panels"></div>
+        <div class="quarter-ledger"></div>
+        <div class="quarter-results"></div>
+        <div class="quarter-diagnostics"></div>
+      </section>
+    </template>
+
+    <template id="monthPanelTemplate">
+      <section class="month-panel hidden">
+        <div class="month-grid"></div>
+      </section>
+    </template>
+
+    <script src="app.js"></script>
+  </body>
+</html>
